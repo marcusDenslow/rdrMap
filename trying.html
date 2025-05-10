@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Locate the user</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.js"></script>
+<style>
+body { margin: 0; padding: 0; }
+#map { position: absolute; top: 0; bottom: 0; width: 100%; }
+/* Hide the default blue dot and circle */
+.mapboxgl-user-location-dot {
+    display: none !important;
+}
+.mapboxgl-user-location-dot::before {
+    display: none !important;
+}
+.mapboxgl-user-location-accuracy-circle {
+    display: none !important;
+}
+/* Fixed custom marker styling - removed the background and border */
+.custom-marker {
+    background-color: transparent; /* Changed from red to transparent */
+    border: none; /* Removed the white border */
+    box-shadow: none; /* Removed the shadow */
+    cursor: pointer;
+    transition: width 0.2s, height 0.2s; /* Smooth transition when size changes */
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoiYXJ0aHVybW9yZ2FuMTIzIiwiYSI6ImNtYWkwdXdiaTBlaWUya3NpdW5sdHBmbTYifQ.HguRYY7y79BpgPAVSUi7fA';
+    
+    // Default center in case geolocation fails
+    let defaultCenter = [-24, 42];
+    let map;
+    let userMarker;
+    let geolocateControl;
+    let initialLocationSet = false;
+    let markerElement; // To store reference to marker element
+    
+    // Constants for dynamic scaling
+    const MIN_MARKER_SIZE = 15; // Minimum size in pixels
+    const MAX_MARKER_SIZE = 40; // Maximum size in pixels
+    const BASE_ZOOM = 17; // Reference zoom level
+    const SCALE_RATIO = 1/18; // RDR2-like ratio
+    
+    // Function to calculate and update marker size based on zoom level
+    function updateMarkerSize() {
+        if (!markerElement || !map) return;
+        
+        const currentZoom = map.getZoom();
+        
+        // Calculate size based on zoom level difference
+        const zoomDiff = currentZoom - BASE_ZOOM;
+        
+        // Apply RDR2-like scaling - size gets smaller as you zoom out
+        let newSize = 30 * Math.pow(1.2, zoomDiff) * (1 + SCALE_RATIO * (BASE_ZOOM - currentZoom));
+        
+        // Apply min/max constraints
+        newSize = Math.max(MIN_MARKER_SIZE, Math.min(MAX_MARKER_SIZE, newSize));
+        
+        // Apply the new size
+        markerElement.style.width = `${newSize}px`;
+        markerElement.style.height = `${newSize}px`;
+    }
+    
+    // Try to get user's location first
+    if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+            // Success callback
+            position => {
+                initializeMap([position.coords.longitude, position.coords.latitude], true);
+            },
+            // Error callback
+            error => {
+                console.warn('Geolocation error:', error);
+                initializeMap(defaultCenter, false);
+            },
+            // Options
+            {
+                enableHighAccuracy: true,
+                timeout: 5000
+            }
+        );
+    } else {
+        // Geolocation not supported
+        console.warn('Geolocation not supported by this browser');
+        initializeMap(defaultCenter, false);
+    }
+
+    function initializeMap(center, isUserLocation) {
+        // Initialize the map with a balanced zoom level
+        map = new mapboxgl.Map({
+            container: 'map', // container ID
+            style: 'mapbox://styles/arthurmorgan123/cmaig9lvy010401r4e9bqa1br',
+            center: center, // Use the determined center
+            zoom: isUserLocation ? 17 : 1 // Zoom based on if this is user location
+        });
+
+        // Create a custom marker element
+        const el = document.createElement('div');
+        el.className = 'custom-marker';
+        
+        // Use a relative path to your image file
+        el.style.backgroundImage = 'url(location-dot-custom.svg)';
+        el.style.backgroundSize = 'contain';
+        el.style.backgroundRepeat = 'no-repeat';
+        el.style.backgroundPosition = 'center';
+        
+        // Store reference to marker element for later size updates
+        markerElement = el;
+
+        // Create the marker
+        userMarker = new mapboxgl.Marker({ element: el });
+
+        // If we have the user's location, add the marker
+        if (isUserLocation) {
+            userMarker.setLngLat(center).addTo(map);
+            initialLocationSet = true;
+        }
+
+        // Add zoom change listener to update marker size
+        map.on('zoom', updateMarkerSize);
+        
+        map.on('load', function() {
+            // Set initial marker size
+            updateMarkerSize();
+            
+            // Add geolocate control with tracking enabled
+            geolocateControl = new mapboxgl.GeolocateControl({
+                positionOptions: {
+                    enableHighAccuracy: true
+                },
+                // Track user location but don't force map to follow
+                trackUserLocation: true,
+                showUserHeading: true
+            });
+            
+            map.addControl(geolocateControl);
+            
+            // Handle tracking events
+            geolocateControl.on('geolocate', function(e) {
+                const userLocation = [e.coords.longitude, e.coords.latitude];
+                userMarker.setLngLat(userLocation).addTo(map);
+                
+                // Only center map on first location
+                if (!initialLocationSet) {
+                    map.flyTo({
+                        center: userLocation,
+                        zoom: 17
+                    });
+                    initialLocationSet = true;
+                }
+                
+                // Update marker size when location changes
+                updateMarkerSize();
+            });
+            
+            // This event is crucial - it prevents the map from auto-following in tracking mode
+            // We need to intercept the tracking change to "active_lock" and immediately change it back
+            geolocateControl.on('trackuserlocationstart', function() {
+                // Give time for initial location to be set
+                setTimeout(function() {
+                    // Get the button
+                    const button = document.querySelector('.mapboxgl-ctrl-geolocate');
+                    
+                    // Check if we're in locked tracking mode (auto-follow) and click to unlock if we are
+                    if (button && button.classList.contains('mapboxgl-ctrl-geolocate-active-lock')) {
+                        button.click(); // This toggles between locked and unlocked tracking
+                    }
+                }, 1000);
+            });
+            
+            // If location wasn't available at start, trigger location now
+            if (!isUserLocation) {
+                setTimeout(function() {
+                    geolocateControl.trigger();
+                }, 1000);
+            }
+        });
+    }
+</script>
+</body>
+</html>
